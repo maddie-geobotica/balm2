@@ -13,6 +13,30 @@
 #include <pcl/io/pcd_io.h>
 #include <malloc.h>
 
+
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+#include <pcl/common/centroid.h>
+#include <pcl/common/transforms.h>
+#include <pcl/common/eigen.h>
+#include <pcl/PointIndices.h>
+
+
+
+#include <liblas/liblas.hpp>   // Include libLAS for LAS file output
+#include <fstream>             // Include for file stream
+#include <chrono>	       // Include for LAS cloud timestamping
+
+
+#include <pcl/common/common.h>
+
+
+
+const std::chrono::system_clock::time_point GPS_EPOCH = std::chrono::system_clock::from_time_t(315964800); // January 6, 1980
+const int GPS_UTC_OFFSET = 18; // seconds (as of 2024)
+
+
+
 using namespace std;
 
 template <typename T>
@@ -182,6 +206,110 @@ void write_pose(vector<IMUST> x_buf, std::string path)
   file.close();
 }
 
+void save_las(vector<IMUST> &x_buf, vector<pcl::PointCloud<PointType>::Ptr> &pl_fulls) {
+
+  pcl::PointCloud<pcl::PointXYZINormal>::Ptr total_cloud (new pcl::PointCloud<pcl::PointXYZINormal> ());
+
+  for (int i = 0; i < x_buf.size(); i++) {
+    Eigen::Matrix4f transform = Eigen::Matrix4f::Identity();
+
+    // (row, column)
+    transform (0,0) = x_buf[i].R(0, 0);
+    transform (0,1) = x_buf[i].R(0, 1);
+    transform (0,2) = x_buf[i].R(0, 2);
+    transform (0,3) = x_buf[i].R(0, 3);
+    transform (1,0) = x_buf[i].R(1, 0);
+    transform (1,1) = x_buf[i].R(1, 1);
+    transform (1,2) = x_buf[i].R(1, 2);
+    transform (1,3) = x_buf[i].R(1, 3);
+    transform (2,0) = x_buf[i].R(2, 0);
+    transform (2,1) = x_buf[i].R(2, 1);
+    transform (2,2) = x_buf[i].R(2, 2);
+    transform (2,3) = x_buf[i].R(2, 3);
+    transform (3,0) = x_buf[i].R(3, 0);
+    transform (3,1) = x_buf[i].R(3, 1);
+    transform (3,2) = x_buf[i].R(3, 2);
+    transform (3,3) = x_buf[i].R(3, 3);
+
+    // Print the transformation
+    printf ("Method #1: using a Matrix4f\n");
+    std::cout << transform << std::endl;
+
+    // Executing the transformation
+    pcl::PointCloud<pcl::PointXYZINormal>::Ptr transformed_cloud (new pcl::PointCloud<pcl::PointXYZINormal> ());
+    // You can either apply transform_1 or transform_2; they are the same
+    pcl::transformPointCloud (*(pl_fulls[i]), *transformed_cloud, transform);
+
+    *total_cloud += *transformed_cloud;
+    printf("SIZE OF TOTAL CLOUD: %ld\n", (*total_cloud).size());
+  }
+
+  // Get the current system time in UTC
+  auto now = std::chrono::system_clock::now();
+
+  // Convert to time_t to use with std::localtime
+  std::time_t now_time_t = std::chrono::system_clock::to_time_t(now);
+
+  // Convert to tm structure
+  std::tm now_tm = *std::localtime(&now_time_t);
+
+  // Use stringstream to format the time into a string
+  std::stringstream ss;
+  ss << std::put_time(&now_tm, "%Y-%m-%d-%H-%M-%S");
+
+  // Construct the file name with the .las extension
+  std::string file_name = "scans_" + ss.str() + ".las";
+
+  // Construct the full directory path
+  std::string all_points_dir = "/home/slam/catkin_ws/data/balm/" + file_name;
+
+  // Log the directory path using ROS_INFO
+  std::cout << "Generated file path: " << all_points_dir.c_str() << std::endl;
+
+  // Create an output stream for the LAS file
+  std::ofstream ofs;
+  ofs.open(all_points_dir, std::ios::out | std::ios::binary);
+
+  // Initialize LAS header
+  liblas::Header header;
+  header.SetDataFormatId(liblas::ePointFormat1); // Set appropriate format (adjust as needed)
+  header.SetPointRecordsCount(0);
+  header.SetScale(0.001, 0.001, 0.001);  // Set appropriate scale
+  header.SetOffset(0.0, 0.0, 0.0);    // Set appropriate offset
+
+  // Get the current LAS GPS time
+  // Calculate the duration in seconds since the GPS epoch
+  auto duration_since_gps_epoch = now - GPS_EPOCH;
+  double gps_time_seconds = std::chrono::duration_cast<std::chrono::seconds>(duration_since_gps_epoch).count() + GPS_UTC_OFFSET;
+
+  Eigen::Vector4f minPt, maxPt;
+
+  pcl::getMinMax3D(*total_cloud, minPt, maxPt);
+
+  header.SetMin(minPt[0] * 1000 - 1, minPt[1] * 1000 - 1, minPt[2] * 1000 - 1);
+  header.SetMax(maxPt[0] * 1000 + 1, maxPt[1] * 1000 + 1, maxPt[2] * 1000 + 1);
+
+  header.SetPointRecordsCount((*total_cloud).size());
+
+  // Initialize LAS writer with the output stream and header
+  liblas::Writer writer(ofs, header);
+
+  for (const auto& point : *total_cloud) { // Assuming laserCloudFullRes is your point cloud
+      liblas::Point las_point(&header);
+      //printf("POINT ADDED: %f, %f, %f\n", point.x, point.y, point.z);
+      las_point.SetCoordinates(point.x * 1000, point.y * 1000, point.z * 1000);
+      las_point.SetIntensity(point.intensity);
+      las_point.SetTime(gps_time_seconds);
+      writer.WritePoint(las_point);
+  }
+
+  // Close the output file stream
+  ofs.close();
+
+  // You can add logging or any additional operations after the LAS file has been written
+  std::cout << "LAS file has been written with " << header.GetPointRecordsCount() << " points." << std::endl;
+}
+
 int main(int argc, char **argv)
 {
   ros::init(argc, argv, "benchmark2");
@@ -272,6 +400,10 @@ int main(int argc, char **argv)
   malloc_trim(0);
   data_show(x_buf, pl_fulls);
   printf("\nRefined point cloud is published.\n");
+
+  printf("\nSaving .las file...\n");
+  save_las(x_buf, pl_fulls);
+  printf("\nSaved .las file.\n");
 
   write_pose(x_buf, file_path);
   ros::spin();

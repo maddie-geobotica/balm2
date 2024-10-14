@@ -28,7 +28,7 @@ find_package(Ceres REQUIRED)
 
 catkin_package(
   CATKIN_DEPENDS geometry_msgs nav_msgs roscpp rospy std_msgs 
-  DEPENDS EIGEN3 PCL
+  DEPENDS EIGEN3 PCL LIBLAS
   INCLUDE_DIRS
 )
 
@@ -37,6 +37,7 @@ include_directories(
   ${catkin_INCLUDE_DIRS}
   ${PCL_INCLUDE_DIRS}
   ${CERES_INCLUDE_DIRS}
+  /usr/local/include/liblas
 )
 
 add_executable(consistency src/simulation/consistency.cpp)
@@ -46,7 +47,7 @@ add_executable(benchmark_virtual src/benchmark/benchmark_virtual.cpp)
 target_link_libraries(benchmark_virtual ${catkin_LIBRARIES} ${PCL_LIBRARIES})
 
 add_executable(benchmark_realworld src/benchmark/benchmark_realworld.cpp)
-target_link_libraries(benchmark_realworld ${catkin_LIBRARIES} ${PCL_LIBRARIES})
+target_link_libraries(benchmark_realworld ${catkin_LIBRARIES} ${PCL_LIBRARIES} /usr/local/lib/liblas.so /usr/local/lib/liblas_c.so)
 
 add_executable(PA_test src/compare_test/PA_test.cpp)
 target_link_libraries(PA_test ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${CERES_LIBRARIES})
